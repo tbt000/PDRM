@@ -1,0 +1,374 @@
+<!-- Doctype -->
+<!DOCTYPE html>
+<html lang="en">
+
+<!-- Heading -->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Train Station</title>
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+    
+<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" type="text/css" href="/css/player.css">
+<style>
+    body { background-color: #1a1a1a; color: #ffffff; }
+    .sidebar { background-color: #2a2a2a; height: 100vh; }
+    .main-content { height: 100vh; overflow-y: auto; }
+    #videoPlayer { width: 100%; height: 100%; }
+    .stats { margin-top: 20px; color: #ffffff; }
+</style>
+
+    <script src="/js/functions.js"></script>
+    
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.1.1/shaka-player.compiled.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.6/hls.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+
+    <link rel="icon" type="image/x-icon" href="/assets/favicon.png">
+</head>
+
+<!-- Body -->
+<body>
+
+    <!-- Header -->
+    <header>
+        Train Station
+    </header>
+
+    <!-- Navbar -->
+    <nav>
+        <a id="main_href" class="navi" href="/">Home</a>
+        <a id="cache_href" class="navi" href="/cache">Cache</a>
+        <a id="pr_href" class="navi" href="/pr">PR</a>
+        <a id="api" class="navi" href="/api">API</a>
+        <a id="extension" class="navi" href="/extension">Extension</a>
+        <!--<a id="devine" class="navi" href="/devine">Devine</a>-->
+        <a id="player_href" class="navi" href="/player">Player</a>
+        <a id="login_href" class="navi" href="/login">Login</a>
+        
+    </nav>
+
+    <!-- Main body -->
+    
+<main class="container-fluid">
+    <div class="row">
+        <div class="col-md-3 sidebar p-3">
+            <h2 class="mb-4">Stream Configuration</h2>
+            <form id="streamForm">
+                <div class="mb-3 position-relative">
+                    <label for="streamUrl" class="form-label">Stream URL</label>
+                    <div class="input-group">
+                        <input type="url" class="form-control" id="streamUrl" required placeholder="Enter url">
+                        <button type="button" class="btn btn-outline-secondary" id="request-cache">R</button>
+                        <button type="button" class="btn btn-outline-secondary" id="extractPssh">P</button>
+                        <button type="button" class="btn btn-outline-secondary" id="clearUrl">&times;</button>
+                    </div>
+                </div>
+                <div class="mb-3 position-relative">
+                    <label for="decryptionKey" class="form-label">Decryption Key (KID:KEY)</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="decryptionKey" placeholder="Enter KID:KEY in hex format">
+                        <button type="button" class="btn btn-outline-secondary" id="clearKey">&times;</button>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="qualitySelector" class="form-label">Quality Selector</label>
+                    <select class="form-select" id="qualitySelector">
+                        <option value="">Auto</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Start Stream</button>
+                <button type="button" id="stopStream" class="btn btn-danger">Stop Stream</button>
+                <button type="button" id="toggleStats" class="btn btn-secondary">Stats for Nerds</button>
+            </form>
+            <div id="statsOutput" class="stats-container mt-4">
+                <pre>Loading...</pre>
+            </div>
+        </div>
+        <div class="col-md-9 main-content p-3">
+            <video id="videoPlayer" controls autoplay></video>
+        </div>
+    </div>
+</main>
+
+<script>
+    const video = document.getElementById('videoPlayer');
+    const statsOutput = document.getElementById('statsOutput');
+    const streamForm = document.getElementById('streamForm');
+    const qualitySelector = document.getElementById('qualitySelector');
+    const stopStreamBtn = document.getElementById('stopStream');
+    let hls;
+    let player;
+    let streamType = '';
+
+    function updatePlayerStats() {
+        if (streamType === 'hls' && hls) {
+            const levels = hls.levels;
+            const currentLevel = hls.currentLevel;
+            const level = levels[currentLevel];
+
+            const stats = {
+                currentTrack: level ? `${level.height}p (${Math.round(level.bitrate / 1000)} kbps)` : 'N/A',
+                bitrate: level ? `${Math.round(level.bitrate / 1000)} kbps` : 'N/A',
+                playbackRate: video.playbackRate
+            };
+            statsOutput.textContent = JSON.stringify(stats, null, 2);
+        } else if (streamType === 'dash' && player) {
+            const activeTrack = player.getVariantTracks().find(track => track.active);
+            const stats = player.getStats();
+
+            const formattedStats = `
+                <strong>Current Track:</strong> ${activeTrack ? `${activeTrack.height}p (${Math.round(activeTrack.bandwidth / 1000)} kbps)` : 'N/A'}<br>
+                <strong>Bitrate:</strong> ${activeTrack ? `${Math.round(activeTrack.bandwidth / 1000)} kbps` : 'N/A'}<br>
+                <strong>Playback Rate:</strong> ${video.playbackRate}<br>
+                <strong>Estimated Bandwidth:</strong> ${Math.round(stats.estimatedBandwidth / 1000)} kbps<br>
+                <strong>Load Latency:</strong> ${stats.loadLatency.toFixed(2)} seconds<br>
+                <strong>Total Dropped Frames:</strong> ${stats.droppedFrames}<br>
+                <strong>Total Decoded Frames:</strong> ${stats.decodedFrames}<br>
+                <strong>Stream Bandwidth:</strong> ${Math.round(stats.streamBandwidth / 1000)} kbps<br>
+                <strong>Max Segment Duration:</strong> ${stats.maxSegmentDuration.toFixed(2)} seconds<br>
+                <strong>Buffering Time:</strong> ${stats.bufferingTime ? stats.bufferingTime.toFixed(2) : 'N/A'} seconds<br>
+            `;
+
+            statsOutput.innerHTML = formattedStats;
+        }
+    }
+
+    async function detectStreamType(url) {
+        try {
+            const response = await fetch(url);
+            const manifestText = await response.text();
+
+            if (manifestText.startsWith('<?xml') && manifestText.includes('<MPD')) {
+                return 'dash'; // DASH stream (MPD manifest)
+            } else if (manifestText.includes('#EXTM3U')) {
+                return 'hls'; // HLS stream (.m3u8 manifest)
+            } else {
+                throw new Error('Unknown manifest format.');
+            }
+        } catch (error) {
+            console.error('Error detecting stream type:', error);
+            return null;
+        }
+    }
+
+    streamForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const streamUrl = document.getElementById('streamUrl').value;
+        const decryptionInput = document.getElementById('decryptionKey').value;
+
+        let decryptionKid = '';
+        let decryptionKey = '';
+
+        if (decryptionInput.includes(':')) {
+            [decryptionKid, decryptionKey] = decryptionInput.split(':');
+        }
+
+        streamType = await detectStreamType(streamUrl);
+
+        if (streamType === 'hls') {
+            if (Hls.isSupported()) {
+                if (hls) {
+                    hls.destroy(); // Destroy previous instance if it exists
+                }
+                hls = new Hls();
+                hls.loadSource(streamUrl);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.play();
+
+                    qualitySelector.innerHTML = '<option value="">Auto</option>'; // Reset and add Auto option
+                    let has1080p = false; // Track if 1080p is available
+                    hls.levels.forEach((level, index) => {
+                        const option = document.createElement('option');
+                        option.value = index;
+                        option.text = `${level.height}p (${Math.round(level.bitrate / 1000)} kbps)`;
+                        qualitySelector.appendChild(option);
+                        if (level.height === 1080) {
+                            has1080p = true; // Mark if 1080p is available
+                        }
+                    });
+                    if (!has1080p) {
+                        console.warn('1080p is not available in the HLS stream.');
+                    }
+                });
+
+                qualitySelector.addEventListener('change', function() {
+                    const selectedQuality = parseInt(qualitySelector.value);
+                    if (selectedQuality >= 0) {
+                        hls.currentLevel = selectedQuality;
+                    } else {
+                        hls.currentLevel = -1; // Auto quality
+                    }
+                });
+
+                setInterval(updatePlayerStats, 2000);
+            } else {
+                console.error('HLS not supported in this browser.');
+            }
+        } else if (streamType === 'dash') {
+            if (player) {
+                player.destroy(); // Destroy previous instance if it exists
+            }
+
+            player = new shaka.Player(video);
+
+            // Disable ABR
+            player.configure({
+                abr: {
+                    enabled: false // Disable adaptive bitrate
+                }
+            });
+
+            if (decryptionKid && decryptionKey) {
+                const clearKeys = {};
+                clearKeys[decryptionKid] = decryptionKey;
+
+                player.configure({
+                    drm: {
+                        clearKeys: clearKeys
+                    }
+                });
+            }
+
+            player.load(streamUrl).then(function() {
+                video.play();
+
+                const tracks = player.getVariantTracks();
+                const uniqueTracks = Array.from(new Map(tracks.map(track => [track.height + '-' + track.bandwidth, track])).values());
+
+                qualitySelector.innerHTML = '<option value="">Auto</option>'; // Reset and add Auto option
+                let has1080p = false; // Track if 1080p is available
+                uniqueTracks.forEach((track) => {
+                    const option = document.createElement('option');
+                    option.value = track.id;
+                    option.text = `${track.height}p (${Math.round(track.bandwidth / 1000)} kbps)`;
+                    qualitySelector.appendChild(option);
+                    if (track.height === 1080) {
+                        has1080p = true; // Mark if 1080p is available
+                    }
+                });
+                if (!has1080p) {
+                    console.warn('1080p is not available in the DASH stream.');
+                }
+
+                qualitySelector.addEventListener('change', function() {
+                    const selectedQuality = parseInt(qualitySelector.value);
+                    if (selectedQuality >= 0) {
+                        player.selectVariantTrack(uniqueTracks[selectedQuality], true);
+                    } else {
+                        const highestTrack = player.getVariantTracks().reduce((max, track) => track.height > max.height ? track : max, { height: 0 });
+                        player.selectVariantTrack(highestTrack, true); // Set the highest track for DASH when Auto
+                    }
+                });
+
+                setInterval(updatePlayerStats, 2000);
+            }).catch(function(error) {
+                console.error('Error loading DASH stream:', error);
+            });
+        }
+    });
+
+    stopStreamBtn.addEventListener('click', function() {
+        if (hls) {
+            hls.destroy();
+        }
+        if (player) {
+            player.destroy();
+        }
+        video.pause();
+        video.src = '';
+    });
+
+    document.getElementById('toggleStats').addEventListener('click', function() {
+        statsOutput.classList.toggle('d-none');
+    });
+
+    document.getElementById('request-cache').addEventListener('click', async function() {
+        const streamUrl = document.getElementById('streamUrl').value;
+            if (streamUrl) {
+                fetch(streamUrl)
+                    .then(response => response.text())
+                    .then(data => {
+                        const parser = new DOMParser();
+                        const xmlDoc = parser.parseFromString(data, "application/xml");
+                        const psshNodes = xmlDoc.getElementsByTagName("cenc:pssh");
+
+                        if (psshNodes.length > 0) {
+                            let smallestPssh = psshNodes[0].textContent;
+                            for (let i = 1; i < psshNodes.length; i++) {
+                                if (psshNodes[i].textContent.length < smallestPssh.length) {
+                                    smallestPssh = psshNodes[i].textContent;
+                                }
+                            }
+
+                            fetch('/cache', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ PSSH: smallestPssh })
+                            })
+                            .then(response => response.json())
+                            .then(data => {
+                                document.getElementById('decryptionKey').value = data.Message;
+                            })
+                            .catch(error => console.error('Error sending PSSH to cache:', error));
+                        } else {
+                            console.log('No PSSH found in the MPD.');
+                        }
+                    })
+                    .catch(error => console.error('Error fetching the MPD:', error));
+            } else {
+                console.log('Please enter a valid stream URL.');
+            }
+    });
+
+    document.getElementById('extractPssh').addEventListener('click', async function() {
+        const streamUrl = document.getElementById('streamUrl').value;
+            if (streamUrl) {
+                fetch(streamUrl)
+                    .then(response => response.text())
+                    .then(data => {
+                        const parser = new DOMParser();
+                        const xmlDoc = parser.parseFromString(data, "application/xml");
+                        const psshNodes = xmlDoc.getElementsByTagName("cenc:pssh");
+
+                        if (psshNodes.length > 0) {
+                            let smallestPssh = psshNodes[0].textContent;
+                            for (let i = 1; i < psshNodes.length; i++) {
+                                if (psshNodes[i].textContent.length < smallestPssh.length) {
+                                    smallestPssh = psshNodes[i].textContent;
+                                }
+                            }
+                            console.log('Extracted PSSH:', smallestPssh);
+                            alert('PSSH Data: ' + smallestPssh);
+                        } else {
+                            console.log('No PSSH found in the MPD.');
+                            alert('No PSSH data found.');
+                        }
+                    })
+                    .catch(error => console.error('Error fetching the MPD:', error));
+            } else {
+                console.log('Please enter a valid stream URL.');
+            }
+    });
+
+    document.getElementById('clearUrl').addEventListener('click', function() {
+        document.getElementById('streamUrl').value = '';
+    });
+
+    document.getElementById('clearKey').addEventListener('click', function() {
+        document.getElementById('decryptionKey').value = '';
+    });
+
+
+    statsContainer.style.display = 'none'; // Hide stats on load
+</script>
+
+
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"rayId":"925c3584fc926802","version":"2025.1.0","r":1,"token":"cb88956bed044b0b894d51a3dd428c51","serverTiming":{"name":{"cfExtPri":true,"cfL4":true,"cfSpeedBrain":true,"cfCacheStatus":true}}}' crossorigin="anonymous"></script>
+</body>
+</html>

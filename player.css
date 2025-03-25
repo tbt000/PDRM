@@ -1,0 +1,17 @@
+.stats-container {
+    margin-left: 0; /* Align the stats to the left */
+    padding-left: 10px; /* Adjust the padding as needed */
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    white-space: pre-wrap; /* Ensure line breaks */
+}
+
+.stats-container ul {
+    list-style-type: none; /* Remove bullet points */
+    padding-left: 0;
+}
+
+.stats-container strong {
+    display: inline-block;
+    width: 150px; /* Adjust width to align the labels */
+}
